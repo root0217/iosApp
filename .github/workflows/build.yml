@@ -1,0 +1,82 @@
+name: Build iOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Create project
+        run: |
+          cat > project.yml <<'EOF'
+          name: Chapa
+          options:
+            deploymentTarget:
+              iOS: "16.0"
+          targets:
+            Chapa:
+              type: application
+              platform: iOS
+              sources:
+                - Sources
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.root0217.myfirstapp  # не меняем: тот же бандл, что уже установлен через AltStore
+                  SWIFT_VERSION: 5.0
+              # INFOPLIST_KEY_UIBackgroundModes Xcode молча игнорирует (это не входит в список
+              # синтезируемых ключей), поэтому Info.plist собираем явно, а не через GENERATE_INFOPLIST_FILE.
+              info:
+                path: Generated-Info.plist
+                properties:
+                  CFBundleDisplayName: Chapa
+                  UILaunchScreen: {}
+                  UIApplicationSceneManifest:
+                    UIApplicationSupportsMultipleScenes: false
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                  UIBackgroundModes:
+                    - audio
+                  # Временно, пока backend работает по HTTP в локальной сети. Убрать после переезда
+                  # на VPS с HTTPS через Caddy — исключение только для этого одного IP, не общее.
+                  NSAppTransportSecurity:
+                    NSExceptionDomains:
+                      192.168.1.133:
+                        NSExceptionAllowsInsecureHTTPLoads: true
+                        NSIncludesSubdomains: false
+          EOF
+
+      - name: Build
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -project Chapa.xcodeproj \
+            -scheme Chapa \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/Chapa.app Payload/
+          zip -r Chapa.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chapa-IPA
+          path: Chapa.ipa
