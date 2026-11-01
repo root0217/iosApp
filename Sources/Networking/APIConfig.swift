@@ -4,7 +4,7 @@ import Foundation
 /// чтобы при переезде с ноутбука на VPS не пересобирать приложение.
 enum APIConfig {
     private static let key = "api.baseURL"
-    private static let fallback = "http://127.0.0.1:8000"
+    private static let fallback = "http://192.168.3.15:8000"
 
     static var baseURL: URL {
         get {
