@@ -53,7 +53,7 @@ jobs:
                   # на VPS с HTTPS через Caddy — исключение только для этого одного IP, не общее.
                   NSAppTransportSecurity:
                     NSExceptionDomains:
-                      192.168.3.15:
+                      192.168.1.133:
                         NSExceptionAllowsInsecureHTTPLoads: true
                         NSIncludesSubdomains: false
           EOF
