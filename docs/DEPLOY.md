@@ -42,17 +42,19 @@ docker compose logs -f api            # должно быть «сервер з�
 ```
 Если репозиторий приватный, клонируй по SSH-ключу (deploy key) или токену.
 
-## 6. Первый пользователь
+## 6. Аккаунт-владелец
+Регистрация в Chapa открытая — любой может создать обычный аккаунт через `/auth/register/start` +
+`/auth/register/confirm` прямо из приложения. Аккаунт с правами администратора (`is_admin=True`) так
+создать нельзя: для него отдельная команда, которая пишет в базу напрямую, в обход API:
 ```bash
-curl -X POST https://api.твойдомен.com/v1/auth/register \
-  -H 'Content-Type: application/json' -H "X-Setup-Token: ТВОЙ_SETUP_TOKEN" \
-  -d '{"email":"you@example.com","password":"длинный-пароль-от-10-символов"}'
+docker compose exec api python -m app.manage create-owner
 ```
-После этого регистрация закрыта (второго пользователя можно создать только при `ALLOW_REGISTRATION=true`).
+Спросит пароль дважды и покажет recovery-код **один раз** — сразу его сохрани, второй раз он не
+показывается. Username фиксированный — `chapa`.
 Проверка входа:
 ```bash
 curl -X POST https://api.твойдомен.com/v1/auth/login -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"…","device_name":"test"}'
+  -d '{"username":"chapa","password":"…","device_name":"test"}'
 ```
 
 ## 7. Бэкапы (restic)

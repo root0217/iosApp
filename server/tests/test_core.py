@@ -189,3 +189,124 @@ class TokenTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- этап 1: аккаунт Chapa (username, recovery-код, аватар) ----
+
+from app.auth.avatars import InvalidImage, process_avatar
+from app.auth.recovery import generate_recovery_code, hash_recovery_code, normalize_recovery_code, recovery_codes_match
+from app.auth.reserved import RESERVED_USERNAMES
+from app.auth.validators import normalize_username, password_error, username_error
+
+
+class UsernameValidatorTests(unittest.TestCase):
+    def test_valid(self):
+        for name in ["abc", "a.b_c", "user123", "a" * 30, "my_friend.2"]:
+            self.assertIsNone(username_error(name), name)
+
+    def test_length(self):
+        self.assertEqual(username_error("ab"), "invalid_format")
+        self.assertEqual(username_error("a" * 31), "invalid_format")
+
+    def test_charset(self):
+        self.assertEqual(username_error("АБВ"), "invalid_format")  # кириллица
+        self.assertEqual(username_error("has space"), "invalid_format")
+        self.assertEqual(username_error("Upper"), "invalid_format")  # normalize_username должен быть вызван раньше
+
+    def test_dots(self):
+        self.assertEqual(username_error(".abc"), "dot_at_edge")
+        self.assertEqual(username_error("abc."), "dot_at_edge")
+        self.assertEqual(username_error("ab..c"), "consecutive_dots")
+        self.assertIsNone(username_error("a.b.c"))
+
+    def test_reserved(self):
+        for name in ["admin", "chapa", "root", "support"]:
+            self.assertIn(name, RESERVED_USERNAMES)
+            self.assertEqual(username_error(name), "reserved")
+
+    def test_normalize(self):
+        self.assertEqual(normalize_username("  ChaPa_User  "), "chapa_user")
+
+
+class PasswordValidatorTests(unittest.TestCase):
+    def test_valid(self):
+        for pw in ["password1", "P@ssw0rd!", "a" * 128, "12345678"]:
+            self.assertIsNone(password_error(pw))
+
+    def test_too_short_or_long(self):
+        self.assertEqual(password_error("short1"), "invalid_characters")
+        self.assertEqual(password_error("a" * 129), "invalid_characters")
+
+    def test_cyrillic_and_space_rejected(self):
+        self.assertEqual(password_error("пароль12"), "invalid_characters")
+        self.assertEqual(password_error("has space1"), "invalid_characters")
+
+
+class RecoveryCodeTests(unittest.TestCase):
+    def test_generated_shape(self):
+        code = generate_recovery_code()
+        self.assertEqual(len(code), 27)  # 4 группы по 6 + 3 дефиса
+        self.assertEqual(code.count("-"), 3)
+        for ambiguous in "O0IL1":
+            self.assertNotIn(ambiguous, code.replace("-", ""))
+
+    def test_hash_is_deterministic_and_searchable(self):
+        code = generate_recovery_code()
+        h1 = hash_recovery_code("secret-a", code)
+        h2 = hash_recovery_code("secret-a", code)
+        self.assertEqual(h1, h2)  # детерминированность — нужна для поиска «забыли username»
+
+    def test_different_secret_different_hash(self):
+        code = generate_recovery_code()
+        self.assertNotEqual(hash_recovery_code("secret-a", code), hash_recovery_code("secret-b", code))
+
+    def test_verify_roundtrip_and_case_insensitive(self):
+        code = generate_recovery_code()
+        stored = hash_recovery_code("k", code)
+        self.assertTrue(recovery_codes_match("k", code, stored))
+        self.assertTrue(recovery_codes_match("k", code.lower(), stored))
+        self.assertTrue(recovery_codes_match("k", f"  {code}  ", stored))
+        self.assertFalse(recovery_codes_match("k", generate_recovery_code(), stored))
+
+    def test_normalize(self):
+        self.assertEqual(normalize_recovery_code(" ab-cd "), "AB-CD")
+
+
+class AvatarProcessingTests(unittest.TestCase):
+    def _make_image(self, size, fmt="JPEG", color=(200, 50, 50)):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", size, color).save(buf, format=fmt)
+        return buf.getvalue()
+
+    def test_crops_to_square_and_resizes(self):
+        from PIL import Image
+        data = self._make_image((800, 400))  # широкое прямоугольное фото
+        out = process_avatar(data, output_size=256)
+        img = Image.open(io.BytesIO(out))
+        self.assertEqual(img.format, "JPEG")
+        self.assertEqual(img.size, (256, 256))
+
+    def test_small_image_upscaled_to_output_size(self):
+        from PIL import Image
+        data = self._make_image((64, 64))
+        out = process_avatar(data, output_size=512)
+        img = Image.open(io.BytesIO(out))
+        self.assertEqual(img.size, (512, 512))
+
+    def test_png_and_webp_accepted(self):
+        from PIL import Image
+        for fmt in ("PNG", "WEBP"):
+            out = process_avatar(self._make_image((300, 300), fmt=fmt), output_size=128)
+            self.assertEqual(Image.open(io.BytesIO(out)).format, "JPEG")
+
+    def test_garbage_rejected(self):
+        with self.assertRaises(InvalidImage):
+            process_avatar(b"not an image", output_size=256)
+
+    def test_disallowed_format_rejected(self):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (100, 100)).save(buf, format="BMP")
+        with self.assertRaises(InvalidImage):
+            process_avatar(buf.getvalue(), output_size=256)

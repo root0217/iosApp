@@ -9,7 +9,7 @@ from sqlalchemy import select
 from . import db
 from .config import get_settings
 from .library import service as svc
-from .models import File, UploadSession, utcnow
+from .models import File, PendingRegistration, UploadSession, utcnow
 from .storage.registry import default_provider, get_provider
 
 log = logging.getLogger("app.tasks")
@@ -39,6 +39,18 @@ async def cleanup_uploads() -> None:
         await session.commit()
     if rows:
         log.info("брошенных загрузок очищено: %d", len(rows))
+
+
+async def cleanup_pending_registrations() -> None:
+    """Регистрации, где ввели username+пароль, но не подтвердили recovery-код вовремя."""
+    async with db.SessionLocal() as session:
+        result = await session.execute(select(PendingRegistration).where(PendingRegistration.expires_at < utcnow()))
+        rows = result.scalars().all()
+        for row in rows:
+            await session.delete(row)
+        await session.commit()
+    if rows:
+        log.info("незавершённых регистраций очищено: %d", len(rows))
 
 
 async def sweep_orphans() -> None:
@@ -78,4 +90,5 @@ def start_background_tasks() -> list[asyncio.Task]:
         asyncio.create_task(_every(3600, 60, purge_trash, "purge_trash")),
         asyncio.create_task(_every(3600, 120, cleanup_uploads, "cleanup_uploads")),
         asyncio.create_task(_every(24 * 3600, 600, sweep_orphans, "sweep_orphans")),
+        asyncio.create_task(_every(1800, 60, cleanup_pending_registrations, "cleanup_pending_registrations")),
     ]
