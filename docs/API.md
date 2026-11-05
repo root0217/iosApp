@@ -34,3 +34,16 @@
 - `GET /changes?cursor=N`: лента изменений для синхронизации (клиент хранит курсор)
 
 **Поиск:** `GET /search?q=...&limit=30&sources=library`: единый поиск; в ответе статус каждого модуля.
+
+**Мессенджер** (`/messenger`) — личные переписки 1:1, пока только REST (WebSocket и индикатор «печатает» — следующий этап):
+- `GET /conversations` — список диалогов (участник, последнее сообщение, непрочитанные, закреплён ли), без скрытых у себя
+- `POST /conversations` {username} — открыть/создать диалог с пользователем
+- `GET /conversations/{id}/messages?before=&limit=` — история с пагинацией по времени; чужие сообщения без `delivered_at` получают его при этом вызове (получатель увидел список)
+- `POST /conversations/{id}/messages` {text?, attachment_file_id?, attachment_duration_seconds?} — отправка; вложение — это `File.id` из `/library/uploads/*`, загруженный с `for_message: true` (тогда он не попадает ни в одну папку библиотеки)
+- `PATCH /messages/{id}` {text} — редактирование своего сообщения (только текст, не вложение), окно 48 часов
+- `DELETE /messages/{id}?for_everyone=true|false` — «у себя» (не видно только вызывающему) или «у всех» (своё, в окне 48 часов; вложение при этом физически освобождается)
+- `POST /conversations/{id}/read` {up_to_message_id} — отметить прочитанным до сообщения включительно
+- `PATCH /conversations/{id}` {pinned} — закрепить/открепить у себя
+- `DELETE /conversations/{id}` — скрыть диалог у себя (вернётся в список при новом сообщении)
+
+Статусы доставки в `MessageOut.status`: `sent` / `delivered` / `read`.

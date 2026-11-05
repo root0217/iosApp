@@ -310,3 +310,62 @@ class AvatarProcessingTests(unittest.TestCase):
         Image.new("RGB", (100, 100)).save(buf, format="BMP")
         with self.assertRaises(InvalidImage):
             process_avatar(buf.getvalue(), output_size=256)
+
+
+# ---- этап 2: мессенджер (чистая логика без БД) ----
+
+import uuid as _uuid
+from datetime import datetime, timedelta, timezone
+
+from app.messenger.pure import canonical_pair, delivery_state, other_participant, within_edit_window
+
+
+class CanonicalPairTests(unittest.TestCase):
+    def test_order_independent_of_call_order(self):
+        a, b = _uuid.uuid4(), _uuid.uuid4()
+        self.assertEqual(canonical_pair(a, b), canonical_pair(b, a))
+
+    def test_same_user_rejected(self):
+        a = _uuid.uuid4()
+        with self.assertRaises(ValueError):
+            canonical_pair(a, a)
+
+    def test_result_is_sorted_by_string(self):
+        a, b = _uuid.uuid4(), _uuid.uuid4()
+        lo, hi = canonical_pair(a, b)
+        self.assertLessEqual(str(lo), str(hi))
+
+
+class OtherParticipantTests(unittest.TestCase):
+    def test_returns_the_other_side(self):
+        a, b = _uuid.uuid4(), _uuid.uuid4()
+        self.assertEqual(other_participant(a, b, a), b)
+        self.assertEqual(other_participant(a, b, b), a)
+
+    def test_non_member_rejected(self):
+        a, b, stranger = _uuid.uuid4(), _uuid.uuid4(), _uuid.uuid4()
+        with self.assertRaises(ValueError):
+            other_participant(a, b, stranger)
+
+
+class EditWindowTests(unittest.TestCase):
+    def test_within_and_outside_window(self):
+        now = datetime.now(timezone.utc)
+        window = timedelta(hours=48)
+        self.assertTrue(within_edit_window(now - timedelta(hours=1), now, window))
+        self.assertTrue(within_edit_window(now - timedelta(hours=48), now, window))  # граница включительно
+        self.assertFalse(within_edit_window(now - timedelta(hours=49), now, window))
+
+
+class DeliveryStateTests(unittest.TestCase):
+    def test_three_states(self):
+        now = datetime.now(timezone.utc)
+        self.assertEqual(delivery_state(None, None), "sent")
+        self.assertEqual(delivery_state(now, None), "delivered")
+        self.assertEqual(delivery_state(now, now), "read")
+
+    def test_read_without_delivered_still_counts_as_read(self):
+        # на практике read всегда идёт вместе с delivered (см. mark_read в service.py),
+        # но функция сама по себе не должна требовать строгого порядка полей
+        now = datetime.now(timezone.utc)
+        self.assertEqual(delivery_state(None, now), "read")

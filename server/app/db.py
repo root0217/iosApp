@@ -25,6 +25,7 @@ def init_engine(url: str) -> None:
 async def create_schema() -> None:
     """Создаёт таблицы при старте. Перед первым изменением схемы в проде нужно перейти на Alembic."""
     from . import models  # noqa: F401  (регистрирует таблицы в Base.metadata)
+    from .messenger import models as messenger_models  # noqa: F401
 
     assert engine is not None
     try:

@@ -72,7 +72,8 @@ async def live_names(
     exclude_file: uuid.UUID | None = None,
     exclude_folder: uuid.UUID | None = None,
 ) -> set[str]:
-    fq = select(func.lower(File.name)).where(File.user_id == user_id, File.deleted_at.is_(None), _eq_or_null(File.folder_id, parent_id))
+    fq = select(func.lower(File.name)).where(File.user_id == user_id, File.deleted_at.is_(None),
+                                             File.is_message_attachment.is_(False), _eq_or_null(File.folder_id, parent_id))
     dq = select(func.lower(Folder.name)).where(Folder.user_id == user_id, Folder.deleted_at.is_(None), _eq_or_null(Folder.parent_id, parent_id))
     if exclude_file:
         fq = fq.where(File.id != exclude_file)

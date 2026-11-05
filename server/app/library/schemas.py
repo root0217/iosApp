@@ -70,6 +70,7 @@ class UploadCreate(BaseModel):
     size: int = Field(ge=0)
     folder_id: uuid.UUID | None = None
     mime_type: str | None = Field(default=None, max_length=127)
+    for_message: bool = False  # вложение мессенджера: не попадёт ни в одну папку библиотеки
 
 
 class UploadOut(BaseModel):

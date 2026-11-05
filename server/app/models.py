@@ -95,6 +95,10 @@ class File(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     deleted_via: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     meta: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Вложение сообщения мессенджера, загруженное тем же /library/uploads-механизмом, что и обычные
+    # файлы библиотеки, но не являющееся файлом библиотеки: не показывается ни в одном списке папок,
+    # не участвует в проверке уникальности имени, живёт своим жизненным циклом через messages.py.
+    is_message_attachment: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
 class UploadSession(Base):
@@ -107,6 +111,7 @@ class UploadSession(Base):
     mime_type: Mapped[str | None] = mapped_column(String(127), nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     received_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    for_message: Mapped[bool] = mapped_column(Boolean, default=False)  # вложение сообщения, не файл библиотеки
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

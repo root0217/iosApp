@@ -81,7 +81,8 @@ async def list_folder(
         crumbs = await svc.breadcrumbs(session, user.id, folder)
 
     fq = select(Folder).where(Folder.user_id == user.id, Folder.deleted_at.is_(None), Folder.parent_id.is_(None) if fid is None else Folder.parent_id == fid)
-    fl = select(File).where(File.user_id == user.id, File.deleted_at.is_(None), File.folder_id.is_(None) if fid is None else File.folder_id == fid)
+    fl = select(File).where(File.user_id == user.id, File.deleted_at.is_(None), File.is_message_attachment.is_(False),
+                           File.folder_id.is_(None) if fid is None else File.folder_id == fid)
     key_f = {"name": func.lower(Folder.name), "updated": Folder.updated_at, "size": func.lower(Folder.name)}[sort]
     key_l = {"name": func.lower(File.name), "updated": File.updated_at, "size": File.size_bytes}[sort]
     fq = fq.order_by(key_f.desc() if order == "desc" else key_f.asc())
@@ -213,11 +214,12 @@ async def create_upload(body: S.UploadCreate, user: User = Depends(get_current_u
         await svc.get_folder(session, user.id, body.folder_id)
     up = UploadSession(
         user_id=user.id,
-        folder_id=body.folder_id,
+        folder_id=None if body.for_message else body.folder_id,
         name=name,
         mime_type=body.mime_type,
         size_bytes=body.size,
         received_bytes=0,
+        for_message=body.for_message,
         expires_at=utcnow() + timedelta(hours=s.upload_session_ttl_hours),
     )
     session.add(up)
@@ -282,25 +284,27 @@ async def complete_upload(upload_id: uuid.UUID, body: S.CompleteIn, user: User =
         await storage.staging_truncate(str(up.id), min(actual, up.received_bytes))
         raise _http(409, "incomplete", received=min(actual, up.received_bytes), size=up.size_bytes)
 
-    # имя и конфликты решаем ДО фиксации файла в хранилище
+    # имя и конфликты решаем ДО фиксации файла в хранилище — но вложения сообщений ни в одной папке
+    # не показываются, так что уникальность имени для них попросту не имеет смысла проверять.
     name = up.name
     existing: File | None = None
-    taken = await svc.live_names(session, user.id, up.folder_id)
-    if name.lower() in taken:
-        if body.on_conflict == "fail":
-            raise _http(409, "name_conflict", name=name)
-        if body.on_conflict == "replace":
-            existing = (
-                await session.execute(
-                    select(File).where(File.user_id == user.id, File.deleted_at.is_(None), func.lower(File.name) == name.lower(),
-                                       File.folder_id.is_(None) if up.folder_id is None else File.folder_id == up.folder_id)
-                )
-            ).scalar_one_or_none()
-            if existing is None:  # занято папкой: заменить нельзя
+    if not up.for_message:
+        taken = await svc.live_names(session, user.id, up.folder_id)
+        if name.lower() in taken:
+            if body.on_conflict == "fail":
                 raise _http(409, "name_conflict", name=name)
-        else:
-            from ..names import unique_name
-            name = unique_name(name, taken)
+            if body.on_conflict == "replace":
+                existing = (
+                    await session.execute(
+                        select(File).where(File.user_id == user.id, File.deleted_at.is_(None), func.lower(File.name) == name.lower(),
+                                           File.folder_id.is_(None) if up.folder_id is None else File.folder_id == up.folder_id)
+                    )
+                ).scalar_one_or_none()
+                if existing is None:  # занято папкой: заменить нельзя
+                    raise _http(409, "name_conflict", name=name)
+            else:
+                from ..names import unique_name
+                name = unique_name(name, taken)
 
     key = storage.new_key()
     obj = await storage.staging_commit(str(up.id), key)
@@ -311,7 +315,8 @@ async def complete_upload(upload_id: uuid.UUID, body: S.CompleteIn, user: User =
         raise _http(422, "checksum_mismatch", message="контрольная сумма не совпала, загрузите файл заново")
 
     dup = await session.scalar(
-        select(File.id).where(File.user_id == user.id, File.deleted_at.is_(None), File.sha256 == obj.sha256, File.size_bytes == obj.size).limit(1)
+        select(File.id).where(File.user_id == user.id, File.deleted_at.is_(None), File.is_message_attachment.is_(False),
+                              File.sha256 == obj.sha256, File.size_bytes == obj.size).limit(1)
     )
     mime = up.mime_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
     old_key = None
@@ -327,6 +332,7 @@ async def complete_upload(upload_id: uuid.UUID, body: S.CompleteIn, user: User =
             user_id=user.id, folder_id=up.folder_id, name=name, original_name=up.name,
             extension=split_ext(name)[1].lower(), mime_type=mime, size_bytes=obj.size, sha256=obj.sha256,
             storage_provider=storage.name, storage_key=key, meta={},
+            is_message_attachment=up.for_message,
         )
         session.add(f)
         replaced = False
