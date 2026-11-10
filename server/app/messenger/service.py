@@ -226,3 +226,21 @@ async def set_pinned(member: ConversationMember, pinned: bool) -> None:
 
 async def hide_conversation(session: AsyncSession, member: ConversationMember) -> None:
     member.hidden_at = utcnow()
+
+
+async def conversation_partner_ids(session: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """Все, с кем у пользователя есть диалог — кому имеет смысл разослать смену presence."""
+    rows = (
+        await session.execute(
+            select(Conversation.user_a_id, Conversation.user_b_id)
+            .where(or_(Conversation.user_a_id == user_id, Conversation.user_b_id == user_id))
+        )
+    ).all()
+    return [other_participant(a, b, user_id) for a, b in rows]
+
+
+async def mark_delivered_now(session: AsyncSession, message: Message) -> None:
+    """Сообщение успешно протолкнуто получателю по WebSocket прямо сейчас — отмечаем «доставлено»,
+    не дожидаясь, пока он сам запросит историю через REST."""
+    if message.delivered_at is None:
+        message.delivered_at = utcnow()

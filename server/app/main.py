@@ -12,6 +12,7 @@ from .config import get_settings
 from .library import service as lib_service
 from .library.router import router as library_router
 from .messenger.router import router as messenger_router
+from .messenger.ws_router import router as messenger_ws_router
 from .names import InvalidName
 from .search.base import registry as search_registry
 from .search.library_provider import LibrarySearchProvider
@@ -51,6 +52,7 @@ app = FastAPI(
 app.include_router(auth_router, prefix="/v1")
 app.include_router(library_router, prefix="/v1")
 app.include_router(messenger_router, prefix="/v1")
+app.include_router(messenger_ws_router, prefix="/v1")
 app.include_router(search_router, prefix="/v1")
 
 

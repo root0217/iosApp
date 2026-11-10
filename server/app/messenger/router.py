@@ -6,11 +6,13 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import presence
 from ..deps import get_current_user, get_session
 from ..models import User
 from . import schemas as S
 from . import service as svc
 from .pure import delivery_state
+from .realtime import broadcast_new_message
 
 router = APIRouter(prefix="/messenger", tags=["messenger"])
 
@@ -27,6 +29,12 @@ def _message_out(message, viewer_id: uuid.UUID, attachment_out: S.AttachmentOut 
         sent_at=message.sent_at, status=delivery_state(message.delivered_at, message.read_at),
         edited_at=message.edited_at, deleted_for_everyone=message.deleted_for_everyone_at is not None,
     )
+
+
+def _public_user(user: User) -> S.PublicUserOut:
+    avatar_url = f"/v1/auth/users/{user.id}/avatar" if user.avatar_key else None
+    return S.PublicUserOut(username=user.username, avatar_url=avatar_url,
+                           online=presence.manager.is_online(user.id), last_active_at=user.last_active_at)
 
 
 async def _attachment_out(session: AsyncSession, message) -> S.AttachmentOut | None:
@@ -49,8 +57,7 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
         last_out = _message_out(last, user.id, await _attachment_out(session, last)) if last else None
         out.append(S.ConversationOut(
             id=row["conversation"].id,
-            participant=S.PublicUserOut(username=row["other"].username,
-                                        avatar_url=f"/v1/auth/users/{row['other'].id}/avatar" if row["other"].avatar_key else None),
+            participant=_public_user(row["other"]),
             last_message=last_out, unread_count=row["unread"], pinned=row["member"].pinned,
             updated_at=row["conversation"].last_message_at,
         ))
@@ -70,8 +77,7 @@ async def start_conversation(body: S.StartConversationIn, user: User = Depends(g
     other_id = conv.user_b_id if conv.user_a_id == user.id else conv.user_a_id
     other = await session.get(User, other_id)
     return S.ConversationOut(
-        id=conv.id,
-        participant=S.PublicUserOut(username=other.username, avatar_url=f"/v1/auth/users/{other.id}/avatar" if other.avatar_key else None),
+        id=conv.id, participant=_public_user(other),
         last_message=None, unread_count=0, pinned=member.pinned, updated_at=conv.last_message_at,
     )
 
@@ -107,7 +113,12 @@ async def post_message(conversation_id: uuid.UUID, body: S.SendMessageIn,
         raise _err(403, "attachment_not_yours") from None
     except svc.Conflict as e:
         raise _err(409, e.code) from None
-    return _message_out(message, user.id, await _attachment_out(session, message))
+
+    attachment = await _attachment_out(session, message)
+    # отправлено по обычному REST, а не по сокету — рассылаем получателю (и другим устройствам
+    # отправителя) в реальном времени точно так же, как при отправке через WebSocket
+    await broadcast_new_message(session, conv, message, user.id, attachment)
+    return _message_out(message, user.id, attachment)
 
 
 @router.patch("/messages/{message_id}", response_model=S.MessageOut)

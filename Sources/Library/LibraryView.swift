@@ -39,7 +39,7 @@ private enum LibraryDeleteTarget: Identifiable {
 }
 
 /// Главный экран «Библиотека»: папки и файлы, фильтры, закреплённая нижняя панель поиска и добавления.
-/// Показывается только авторизованному пользователю — gate на уровне RootView/LibraryGate.
+/// Авторизация теперь проверяется один раз на уровне всего приложения (AuthGate), а не здесь отдельно.
 struct LibraryView: View {
     @EnvironmentObject var auth: AuthSession
     @EnvironmentObject var music: MusicManager

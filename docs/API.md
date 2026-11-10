@@ -47,3 +47,24 @@
 - `DELETE /conversations/{id}` — скрыть диалог у себя (вернётся в список при новом сообщении)
 
 Статусы доставки в `MessageOut.status`: `sent` / `delivered` / `read`.
+
+**WebSocket** (`/ws?token=<access_token>`) — реалтайм поверх того же REST, ничего не заменяет
+(сообщение можно по-прежнему отправить обычным POST, в сокет оно всё равно попадёт). Один
+процесс uvicorn, без `--workers`: при переходе на несколько воркеров/реплик понадобится
+что-то вроде Redis pub/sub, сейчас presence и список соединений — просто в памяти процесса.
+
+Клиент → сервер (JSON, поле `type`):
+- `{"type":"message","conversation_id":...,"text"?,"attachment_file_id"?,"attachment_duration_seconds"?}` — то же, что `POST .../messages`, но по сокету
+- `{"type":"typing","conversation_id":...}` — не сохраняется, просто пробрасывается собеседнику, если он онлайн
+- `{"type":"read","conversation_id":...,"up_to_message_id":...}` — то же, что `POST .../read`
+- `{"type":"ping"}` → `{"type":"pong"}`
+
+Сервер → клиент:
+- `{"type":"message","message":MessageOut}` — новое сообщение (и получателю, и остальным устройствам отправителя)
+- `{"type":"message_status","message_id":...,"status":"delivered"}` — когда сообщение реально доставлено онлайн-получателю
+- `{"type":"typing","conversation_id":...,"user_id":...}`
+- `{"type":"read","conversation_id":...,"up_to_message_id":...,"user_id":...}`
+- `{"type":"presence","username":...,"online":bool,"last_active_at":...}` — только тем, с кем есть диалог, не всем подряд; намеренно `username`, а не `user_id` — обычным пользователям id не показывается (см. ТЗ про аккаунт), да и сверить голый id клиенту всё равно было бы не с чем
+- `{"type":"error","code":...}`
+
+`PublicUserOut` (в поиске, профиле, участнике диалога) теперь дополнительно содержит `online` и `last_active_at`.

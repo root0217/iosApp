@@ -1,11 +1,14 @@
 import SwiftUI
 
 struct SidebarView: View {
-    @EnvironmentObject var store: ChatStore
     @EnvironmentObject var router: AppRouter
     @EnvironmentObject var auth: AuthSession
+    @EnvironmentObject var messenger: MessengerStore
     let close: () -> Void
+
     @State private var showAll = false
+    @State private var showNewMessage = false
+    @State private var pendingHide: Conversation?
 
     // Все шесть пунктов в одном блоке, без разделителя и отступа перед «Музыкой».
     private let menu: [(icon: String, title: String, target: AppSection?)] = [
@@ -17,8 +20,8 @@ struct SidebarView: View {
         ("music.note", "Музыка", .music)
     ]
 
-    private var visibleChats: [Conversation] {
-        showAll ? store.conversations : Array(store.conversations.prefix(7))
+    private var visibleConversations: [Conversation] {
+        showAll ? messenger.conversations : Array(messenger.conversations.prefix(7))
     }
 
     var body: some View {
@@ -69,31 +72,26 @@ struct SidebarView: View {
                 .padding(.top, 25)
                 .padding(.bottom, 24)
 
-            // История чатов
+            // Переписки
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(visibleChats) { chat in
-                        Button {
-                            router.section = .chat
-                            store.open(chat)
-                            close()
-                        } label: {
-                            Text(chat.title)
-                                .font(Typo.history)
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .frame(height: 42)
-                                .contentShape(Rectangle())
+                    if !messenger.conversationsLoaded {
+                        ProgressView().padding(.top, 20).frame(maxWidth: .infinity)
+                    } else if messenger.conversations.isEmpty {
+                        Text("Пока нет переписок").font(Typo.history).foregroundStyle(Theme.secondary).padding(.vertical, 8)
+                    } else {
+                        ForEach(visibleConversations) { conversation in
+                            conversationRow(conversation)
                         }
-                    }
-                    if !showAll && store.conversations.count > 7 {
-                        Button {
-                            withAnimation(.easeOut(duration: 0.25)) { showAll = true }
-                        } label: {
-                            Text("Показать все…")
-                                .font(Typo.history)
-                                .foregroundStyle(Theme.secondary)
-                                .frame(height: 42)
+                        if !showAll && messenger.conversations.count > 7 {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.25)) { showAll = true }
+                            } label: {
+                                Text("Показать все…")
+                                    .font(Typo.history)
+                                    .foregroundStyle(Theme.secondary)
+                                    .frame(height: 42)
+                            }
                         }
                     }
                 }
@@ -103,9 +101,7 @@ struct SidebarView: View {
             // Низ: «Чат» и настройки
             HStack {
                 Button {
-                    router.section = .chat
-                    store.newChat()
-                    close()
+                    showNewMessage = true
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "square.and.pencil")
@@ -135,5 +131,79 @@ struct SidebarView: View {
         }
         .foregroundStyle(.primary)
         .buttonStyle(PressableStyle())
+        .sheet(isPresented: $showNewMessage) {
+            NewMessageSheet(onOpen: openConversation)
+        }
+        .confirmationDialog("Удалить переписку у себя?", isPresented: Binding(get: { pendingHide != nil }, set: { if !$0 { pendingHide = nil } }), titleVisibility: .visible) {
+            Button("Удалить", role: .destructive) {
+                if let conversation = pendingHide { Task { await messenger.hide(conversation) } }
+            }
+            Button("Отмена", role: .cancel) {}
+        }
+    }
+
+    private func conversationRow(_ conversation: Conversation) -> some View {
+        Button {
+            openConversation(conversation)
+        } label: {
+            HStack(spacing: 10) {
+                ZStack(alignment: .bottomTrailing) {
+                    RemoteAvatar(urlPath: conversation.participant.avatarUrl, fallbackText: conversation.participant.username, size: 36)
+                    if conversation.participant.online {
+                        Circle().fill(.green).frame(width: 9, height: 9)
+                            .overlay(Circle().stroke(Theme.background, lineWidth: 2))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(conversation.participant.username)
+                            .font(Typo.history).fontWeight(conversation.unreadCount > 0 ? .semibold : .regular)
+                            .lineLimit(1)
+                        if conversation.pinned {
+                            Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(Theme.secondary)
+                        }
+                    }
+                    Text(previewText(for: conversation))
+                        .font(.system(size: 12))
+                        .foregroundStyle(messenger.isTyping(in: conversation.id) ? Theme.accent : Theme.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if conversation.unreadCount > 0 {
+                    Text("\(conversation.unreadCount)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Theme.accent, in: Capsule())
+                }
+            }
+            .frame(height: 50)
+            .contentShape(Rectangle())
+        }
+        .contextMenu {
+            Button { Task { await messenger.setPinned(conversation, pinned: !conversation.pinned) } } label: {
+                Label(conversation.pinned ? "Открепить" : "Закрепить", systemImage: "pin")
+            }
+            Button(role: .destructive) { pendingHide = conversation } label: {
+                Label("Удалить у себя", systemImage: "trash")
+            }
+        }
+    }
+
+    private func previewText(for conversation: Conversation) -> String {
+        if messenger.isTyping(in: conversation.id) { return "печатает…" }
+        guard let last = conversation.lastMessage else { return "" }
+        if last.deletedForEveryone { return "Сообщение удалено" }
+        if let attachment = last.attachment {
+            return last.text?.isEmpty == false ? last.text! : attachment.mimeType.hasPrefix("image/") ? "Фото" : (attachment.durationSeconds != nil ? "Голосовое сообщение" : "Файл")
+        }
+        return last.text ?? ""
+    }
+
+    private func openConversation(_ conversation: Conversation) {
+        router.section = .chat
+        messenger.open(conversation)
+        close()
     }
 }

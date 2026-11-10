@@ -2,15 +2,15 @@ import SwiftUI
 
 @main
 struct ChatApp: App {
-    @StateObject private var store = ChatStore()
+    @StateObject private var messenger = MessengerStore()
     @StateObject private var router = AppRouter()
     @StateObject private var music = MusicManager()
     @StateObject private var auth = AuthSession.shared
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(store)
+            AuthGate()
+                .environmentObject(messenger)
                 .environmentObject(router)
                 .environmentObject(music)
                 .environmentObject(auth)

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import presence
 from ..config import get_settings
 from ..deps import get_current_user, get_session
 from ..models import File, Folder, PendingRegistration, RefreshToken, User, utcnow
@@ -71,6 +72,11 @@ def _avatar_url(user: User) -> str | None:
     return f"/v1/auth/users/{user.id}/avatar" if user.avatar_key else None
 
 
+def _public_user(user: User) -> "PublicUserOut":
+    return PublicUserOut(username=user.username, avatar_url=_avatar_url(user),
+                         online=presence.manager.is_online(user.id), last_active_at=user.last_active_at)
+
+
 # ====================== схемы ======================
 class UserOut(BaseModel):
     id: uuid.UUID
@@ -82,6 +88,8 @@ class UserOut(BaseModel):
 class PublicUserOut(BaseModel):
     username: str
     avatar_url: str | None = None
+    online: bool = False
+    last_active_at: datetime | None = None
 
 
 class TokenPair(BaseModel):
@@ -377,7 +385,7 @@ async def search_users(q: str = Query(min_length=1, max_length=30), limit: int =
             .limit(limit)
         )
     ).scalars()
-    return [PublicUserOut(username=u.username, avatar_url=_avatar_url(u)) for u in rows]
+    return [_public_user(u) for u in rows]
 
 
 @router.get("/users/{username}", response_model=PublicUserOut)
@@ -385,7 +393,7 @@ async def get_public_profile(username: str, user: User = Depends(get_current_use
     target = await session.scalar(select(User).where(User.username == normalize_username(username), User.is_active.is_(True)))
     if target is None:
         raise _err(404, "not_found")
-    return PublicUserOut(username=target.username, avatar_url=_avatar_url(target))
+    return _public_user(target)
 
 
 # ====================== аватар ======================

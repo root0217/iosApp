@@ -1,7 +1,7 @@
 import Foundation
 
-/// Состояние входа: токены, обновление по истечении, выход. Один экземпляр на всё приложение —
-/// библиотека и (в будущем) мессенджер используют именно его, второй системы пользователей не заводим.
+/// Состояние входа: токены, текущий профиль, обновление по истечении, выход. Один экземпляр на
+/// всё приложение — библиотека и мессенджер используют именно его, второй системы пользователей нет.
 ///
 /// Класс на @MainActor, но его async-методы вызываются и из APIClient (отдельный actor): Swift сам
 /// делает переход между акторами на каждом `await`, поэтому никаких ручных Task{}/nonisolated не нужно.
@@ -10,7 +10,7 @@ final class AuthSession: ObservableObject {
     static let shared = AuthSession()
 
     @Published private(set) var isAuthenticated = false
-    @Published private(set) var email: String?
+    @Published private(set) var me: MeOut?
     @Published var lastError: String?
     @Published var showSettings = false
 
@@ -18,7 +18,6 @@ final class AuthSession: ObservableObject {
         static let access = "auth.access"
         static let refresh = "auth.refresh"
         static let accessExpiry = "auth.accessExpiry"
-        static let email = "auth.email"
     }
 
     private var accessToken: String?
@@ -29,21 +28,43 @@ final class AuthSession: ObservableObject {
     private init() {
         accessToken = Keychain.get(Keys.access)
         refreshToken = Keychain.get(Keys.refresh)
-        email = UserDefaults.standard.string(forKey: Keys.email)
         if let raw = UserDefaults.standard.object(forKey: Keys.accessExpiry) as? Double {
             accessExpiry = Date(timeIntervalSince1970: raw)
         }
         isAuthenticated = refreshToken != nil
     }
 
-    func login(email: String, password: String) async {
+    /// Вызывается один раз при старте приложения: если токен уже есть, подтягивает профиль
+    /// и заодно проверяет, что refresh-токен ещё жив (иначе тихо разлогинивает).
+    func bootstrap() async {
+        guard isAuthenticated else { return }
+        do {
+            me = try await AuthAPI.me()
+        } catch {
+            forceLogout()
+        }
+    }
+
+    func login(username: String, password: String) async {
         lastError = nil
         do {
-            let pair = try await AuthAPI.login(email: email, password: password)
-            store(pair, email: email)
+            let pair = try await AuthAPI.login(username: username, password: password)
+            store(pair)
+            me = try? await AuthAPI.me()
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? "Не удалось войти"
         }
+    }
+
+    /// Вызывается после успешного register/confirm — токены уже получены, просто сохраняем сессию.
+    func completeRegistration(_ pair: TokenPair) async {
+        lastError = nil
+        store(pair)
+        me = try? await AuthAPI.me()
+    }
+
+    func refreshProfile() async {
+        me = try? await AuthAPI.me()
     }
 
     func logout() async {
@@ -51,7 +72,7 @@ final class AuthSession: ObservableObject {
         forceLogout()
     }
 
-    /// Токены недействительны (сервер отклонил refresh) — чистим всё локально, пользователь увидит экран входа.
+    /// Токены недействительны — чистим всё локально, пользователь увидит экран входа.
     func forceLogout() {
         Keychain.remove(Keys.access)
         Keychain.remove(Keys.refresh)
@@ -60,6 +81,7 @@ final class AuthSession: ObservableObject {
         refreshToken = nil
         accessExpiry = .distantPast
         isAuthenticated = false
+        me = nil
     }
 
     /// Токен для APIClient: если истёк или истекает в ближайшие 10 секунд, сперва обновляется.
@@ -91,20 +113,16 @@ final class AuthSession: ObservableObject {
     private func performRefresh() async throws {
         guard let refresh = refreshToken else { throw APIError.notAuthenticated }
         let pair = try await AuthAPI.refresh(refreshToken: refresh)
-        store(pair, email: email)
+        store(pair)
     }
 
-    private func store(_ pair: TokenPair, email: String?) {
+    private func store(_ pair: TokenPair) {
         accessToken = pair.accessToken
         refreshToken = pair.refreshToken
         accessExpiry = Date().addingTimeInterval(TimeInterval(pair.expiresIn))
         Keychain.set(pair.accessToken, for: Keys.access)
         Keychain.set(pair.refreshToken, for: Keys.refresh)
         UserDefaults.standard.set(accessExpiry.timeIntervalSince1970, forKey: Keys.accessExpiry)
-        if let email = email {
-            self.email = email
-            UserDefaults.standard.set(email, forKey: Keys.email)
-        }
         isAuthenticated = true
         lastError = nil
     }

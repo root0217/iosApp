@@ -3,7 +3,6 @@ import UIKit
 
 /// Корневой экран: чат или музыка + выезжающий сайдбар (карточка сдвигается вправо, углы скругляются).
 struct RootView: View {
-    @EnvironmentObject var store: ChatStore
     @EnvironmentObject var router: AppRouter
     @State private var drawerOpen = false
     @GestureState private var dragX: CGFloat = 0
@@ -35,7 +34,7 @@ struct RootView: View {
                         .opacity(router.section == .music ? 1 : 0)
                         .allowsHitTesting(router.section == .music)
                         .accessibilityHidden(router.section != .music)
-                    LibraryGate(openDrawer: { setDrawer(true) })
+                    LibraryView(openDrawer: { setDrawer(true) })
                         .opacity(router.section == .library ? 1 : 0)
                         .allowsHitTesting(router.section == .library)
                         .accessibilityHidden(router.section != .library)
